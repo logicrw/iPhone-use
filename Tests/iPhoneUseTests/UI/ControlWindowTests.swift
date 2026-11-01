@@ -224,6 +224,71 @@ final class AppRunModeStoreTests: XCTestCase {
         XCTAssertFalse(StringsUI.en.quietBackgroundMode.isEmpty)
         XCTAssertNotEqual(StringsUI.zh.quietBackgroundMode, StringsUI.en.quietBackgroundMode)
     }
+
+    func testConcurrentSetSerializesPersistenceAndInMemoryMode() throws {
+        let suite = "run-mode-concurrency-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let firstEnteredPersist = DispatchSemaphore(value: 0)
+        let secondReadyToEnterSet = DispatchSemaphore(value: 0)
+        let hookLock = NSLock()
+        var pausedFirstQuietWrite = false
+
+        let store = AppRunModeStore(
+            defaults: defaults,
+            arguments: ["iphone-use"],
+            environment: [:],
+            persistHook: { mode in
+                let shouldPause = hookLock.withLock { () -> Bool in
+                    guard mode == .residentQuiet, !pausedFirstQuietWrite else { return false }
+                    pausedFirstQuietWrite = true
+                    return true
+                }
+                guard shouldPause else { return }
+                firstEnteredPersist.signal()
+                _ = secondReadyToEnterSet.wait(timeout: .now() + 1.0)
+                // Give the competing set(.desktop) call time to contend on store.lock
+                // while this transaction is still mid-flight after defaults.set.
+                Thread.sleep(forTimeInterval: 0.02)
+            })
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: AppRunModeStore.didChangeNotification, object: store, queue: nil
+        ) { _ in
+            // Reading store.mode synchronously inside the observer verifies post() runs unlocked.
+            _ = store.mode
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            store.set(.residentQuiet)
+            group.leave()
+        }
+
+        XCTAssertEqual(firstEnteredPersist.wait(timeout: .now() + 1.0), .success)
+
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            secondReadyToEnterSet.signal()
+            store.set(.desktop)
+            group.leave()
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 2.0), .success)
+        XCTAssertEqual(store.mode, .desktop)
+        XCTAssertEqual(defaults.string(forKey: AppRunModeStore.defaultsKey), store.mode.rawValue)
+        XCTAssertEqual(
+            AppRunModeStore(defaults: defaults, arguments: ["iphone-use"], environment: [:]).mode,
+            store.mode)
+
+        DispatchQueue.concurrentPerform(iterations: 64) { index in
+            store.set(index.isMultiple(of: 2) ? .residentQuiet : .desktop)
+        }
+        XCTAssertEqual(defaults.string(forKey: AppRunModeStore.defaultsKey), store.mode.rawValue)
+    }
 }
 
 final class MultiDeviceWindowInputTests: XCTestCase {

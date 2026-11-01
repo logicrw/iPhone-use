@@ -59,25 +59,30 @@ final class AppRunModeStore {
     private let lock = NSLock()
     private var current: AppRunMode
     private let defaults: UserDefaults
+    private let persistHook: ((AppRunMode) -> Void)?
 
     var mode: AppRunMode { lock.withLock { current } }
 
     init(
         defaults: UserDefaults = .standard,
         arguments: [String] = CommandLine.arguments,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        persistHook: ((AppRunMode) -> Void)? = nil
     ) {
         self.defaults = defaults
+        self.persistHook = persistHook
         current = AppRunMode.resolve(
             arguments: arguments,
             environment: environment,
             persistedRawValue: defaults.string(forKey: Self.defaultsKey))
     }
 
-    /// Always persists an explicit user choice; notifies observers only on change.
+    /// Atomically persists an explicit user choice and updates in-memory state;
+    /// notifies observers outside the lock only on actual transitions.
     func set(_ mode: AppRunMode) {
-        defaults.set(mode.rawValue, forKey: Self.defaultsKey)
         let changed = lock.withLock { () -> Bool in
+            defaults.set(mode.rawValue, forKey: Self.defaultsKey)
+            persistHook?(mode)
             guard current != mode else { return false }
             current = mode
             return true
