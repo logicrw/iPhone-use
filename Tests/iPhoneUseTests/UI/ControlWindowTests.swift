@@ -63,6 +63,167 @@ final class ControlWindowStateTests: XCTestCase {
         _ = state.update(connectedIDs: [])
         XCTAssertTrue(state.close(deviceID: "phone-a"))
     }
+
+    func testResidentQuietSuppressesStartupPlaceholderAndHotplugWindows() {
+        var state = ControlWindowState(mode: .residentQuiet)
+        XCTAssertFalse(state.needsWaitingWindow)
+        XCTAssertEqual(state.update(connectedIDs: []), [])
+        XCTAssertFalse(state.needsWaitingWindow)
+
+        XCTAssertEqual(state.update(connectedIDs: ["phone-a"]), [])
+        XCTAssertFalse(state.needsWaitingWindow)
+        XCTAssertEqual(state.deviceIDs, [])
+
+        XCTAssertEqual(state.update(connectedIDs: ["phone-a", "phone-b"]), [])
+        XCTAssertEqual(state.deviceIDs, [])
+    }
+
+    func testResidentQuietOpensOnExplicitRequestAndKeepsRunningWhenLastWindowCloses() {
+        var state = ControlWindowState(mode: .residentQuiet)
+        _ = state.update(connectedIDs: ["phone-a"])
+
+        // Dock reopen or Window -> Show All Devices explicitly presents connected phones.
+        XCTAssertEqual(state.update(connectedIDs: ["phone-a"], reason: .userRequest), ["phone-a"])
+        XCTAssertFalse(state.needsWaitingWindow)
+
+        // Plugging in a second phone while one window is open stays silent until requested.
+        XCTAssertEqual(state.update(connectedIDs: ["phone-a", "phone-b"], reason: .discovery), [])
+        XCTAssertEqual(state.deviceIDs, ["phone-a"])
+
+        // Closing the last window neither terminates the process nor spawns a waiting window.
+        XCTAssertFalse(state.close(deviceID: "phone-a"))
+        XCTAssertFalse(state.needsWaitingWindow)
+        XCTAssertEqual(state.deviceIDs, [])
+
+        // Unplugging and reconnecting the phone in quiet mode does not pop a new window.
+        XCTAssertEqual(state.update(connectedIDs: []), [])
+        XCTAssertEqual(state.update(connectedIDs: ["phone-a"]), [])
+        XCTAssertFalse(state.needsWaitingWindow)
+    }
+
+    func testResidentQuietExplicitRequestWithoutDevicesShowsDismissiblePlaceholder() {
+        var state = ControlWindowState(mode: .residentQuiet)
+        XCTAssertEqual(state.update(connectedIDs: [], reason: .userRequest), [])
+        XCTAssertTrue(state.needsWaitingWindow)
+
+        // While the waiting placeholder is minimized, hotplug must not pop an unminimized window.
+        XCTAssertEqual(
+            state.update(
+                connectedIDs: ["phone-a"], reason: .discovery, canReplaceWaitingWindow: false),
+            [])
+        XCTAssertTrue(state.needsWaitingWindow)
+
+        // Once visible (e.g. unminimized), the open placeholder transitions to the connected phone.
+        XCTAssertEqual(
+            state.update(
+                connectedIDs: ["phone-a"], reason: .discovery, canReplaceWaitingWindow: true),
+            ["phone-a"])
+        XCTAssertFalse(state.needsWaitingWindow)
+        XCTAssertFalse(state.close(deviceID: "phone-a"))
+
+        // Opening and closing the waiting placeholder itself also keeps the service alive.
+        XCTAssertEqual(state.update(connectedIDs: [], reason: .userRequest), [])
+        XCTAssertTrue(state.needsWaitingWindow)
+        XCTAssertFalse(state.close(deviceID: nil))
+        XCTAssertFalse(state.needsWaitingWindow)
+    }
+
+    func testTogglingBetweenDesktopAndResidentQuietRestoresZeroWindowSurfaceSafely() {
+        var state = ControlWindowState(mode: .desktop)
+        XCTAssertEqual(state.update(connectedIDs: []), [])
+        XCTAssertTrue(state.needsWaitingWindow)
+
+        // Enabling quiet mode at runtime keeps an already-visible placeholder until closed.
+        state.setMode(.residentQuiet)
+        XCTAssertTrue(state.needsWaitingWindow)
+        XCTAssertFalse(state.close(deviceID: nil))
+        XCTAssertFalse(state.needsWaitingWindow)
+
+        // Returning to desktop mode with zero windows and no phone restores the waiting placeholder.
+        state.setMode(.desktop)
+        XCTAssertEqual(state.update(connectedIDs: [], reason: .resumeDesktopMode), [])
+        XCTAssertTrue(state.needsWaitingWindow)
+
+        // Returning to desktop mode with zero windows while a phone is connected opens that phone.
+        state.setMode(.residentQuiet)
+        _ = state.close(deviceID: nil)
+        _ = state.update(connectedIDs: ["phone-a"], reason: .userRequest)
+        XCTAssertFalse(state.close(deviceID: "phone-a"))
+        state.setMode(.desktop)
+        XCTAssertEqual(state.update(connectedIDs: ["phone-a"], reason: .resumeDesktopMode), ["phone-a"])
+        XCTAssertFalse(state.needsWaitingWindow)
+        XCTAssertTrue(state.close(deviceID: "phone-a"))
+    }
+}
+
+final class AppRunModeStoreTests: XCTestCase {
+    func testPrecedenceAndPersistenceWithoutMutatingDefaultsOnStartupOverrides() throws {
+        let suite = "run-mode-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertEqual(AppRunModeStore(defaults: defaults, arguments: ["iphone-use"], environment: [:]).mode, .desktop)
+
+        defaults.set("bogus", forKey: AppRunModeStore.defaultsKey)
+        XCTAssertEqual(AppRunModeStore(defaults: defaults, arguments: ["iphone-use"], environment: [:]).mode, .desktop)
+
+        // Explicit menu changes persist and notify only on actual transitions.
+        let store = AppRunModeStore(defaults: defaults, arguments: ["iphone-use"], environment: [:])
+        var notifications = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: AppRunModeStore.didChangeNotification, object: store, queue: nil
+        ) { _ in notifications += 1 }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        store.set(.desktop)
+        XCTAssertEqual(defaults.string(forKey: AppRunModeStore.defaultsKey), "desktop")
+        XCTAssertEqual(notifications, 0)
+
+        store.set(.residentQuiet)
+        XCTAssertEqual(store.mode, .residentQuiet)
+        XCTAssertEqual(defaults.string(forKey: AppRunModeStore.defaultsKey), "residentQuiet")
+        XCTAssertEqual(notifications, 1)
+
+        store.set(.residentQuiet)
+        XCTAssertEqual(notifications, 1)
+
+        // Environment overrides persisted defaults without rewriting UserDefaults; invalid env falls through.
+        XCTAssertEqual(
+            AppRunModeStore(
+                defaults: defaults,
+                arguments: ["iphone-use"],
+                environment: [AppRunModeStore.environmentKey: "desktop"]
+            ).mode,
+            .desktop)
+        XCTAssertEqual(defaults.string(forKey: AppRunModeStore.defaultsKey), "residentQuiet")
+        XCTAssertEqual(
+            AppRunModeStore(
+                defaults: defaults,
+                arguments: ["iphone-use"],
+                environment: [AppRunModeStore.environmentKey: "invalid"]
+            ).mode,
+            .residentQuiet)
+
+        // CLI flags override both environment and persisted defaults; last explicit flag wins.
+        XCTAssertEqual(
+            AppRunModeStore(
+                defaults: defaults,
+                arguments: ["iphone-use", "--desktop", "--resident-quiet"],
+                environment: [AppRunModeStore.environmentKey: "desktop"]
+            ).mode,
+            .residentQuiet)
+        XCTAssertEqual(
+            AppRunModeStore(
+                defaults: defaults,
+                arguments: ["iphone-use", "--resident-quiet", "--desktop"],
+                environment: [AppRunModeStore.environmentKey: "resident-quiet"]
+            ).mode,
+            .desktop)
+
+        XCTAssertFalse(StringsUI.zh.quietBackgroundMode.isEmpty)
+        XCTAssertFalse(StringsUI.en.quietBackgroundMode.isEmpty)
+        XCTAssertNotEqual(StringsUI.zh.quietBackgroundMode, StringsUI.en.quietBackgroundMode)
+    }
 }
 
 final class MultiDeviceWindowInputTests: XCTestCase {
