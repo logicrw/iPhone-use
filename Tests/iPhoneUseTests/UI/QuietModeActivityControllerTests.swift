@@ -37,7 +37,11 @@ final class QuietModeActivityControllerTests: XCTestCase {
                 return result
             },
             checkIdleUnplug: {
-                if manager.clearIdleUSBDemandIfUnplugged(observeUSBTopology: { topology }) { syncDemand() }
+                if manager.clearIdleUSBDemandIfUnplugged(observeUSBTopology: { topology }) {
+                    syncDemand()
+                } else if manager.restoreIdleUSBDemandIfPluggedIn(observeUSBTopology: { topology }) {
+                    syncDemand()
+                }
             }, resumeCapture: { XCTFail("No request should wake capture") })
         controller.start()
         defer { controller.stop() }
@@ -64,6 +68,12 @@ final class QuietModeActivityControllerTests: XCTestCase {
         controller.checkIdle()
         XCTAssertEqual(demands, [true, false], "Unplug notification must only be emitted once")
         XCTAssertEqual(restores, 1, "Unplug checks must not repeat capture shutdown")
+        topology = Self.observedTopology([0x101])
+        controller.checkIdle()
+        XCTAssertEqual(demands, [true, false, true], "Replugging USB during idle must restore Bluetooth demand")
+        XCTAssertTrue(policy.shouldRunCoreBluetooth)
+        controller.checkIdle()
+        XCTAssertEqual(demands, [true, false, true], "Replug notification must only be emitted once")
     }
 
     func testMultipleAttachedPhonesAndTransientUnavailablePreserveIdleBluetoothDemand() {

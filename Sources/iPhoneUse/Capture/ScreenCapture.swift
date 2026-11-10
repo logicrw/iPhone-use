@@ -383,6 +383,21 @@ final class ScreenCaptureManager: CaptureValeriaRecoveryHost {
         }
     }
 
+    @discardableResult
+    func restoreIdleUSBDemandIfPluggedIn(
+        observeUSBTopology: () -> USBValeriaConfigurator.IOSUSBTopologyObservation =
+            USBValeriaConfigurator.currentIOSUSBTopology
+    ) -> Bool {
+        guard lock.withLock({ isStopped && !retainsIdleUSBDemand }),
+            observeUSBTopology().hasAttachedDevices
+        else { return false }
+        return lock.withLock {
+            guard isStopped, !retainsIdleUSBDemand else { return false }
+            retainsIdleUSBDemand = true
+            return true
+        }
+    }
+
     private func stop(
         waitTimeout: TimeInterval,
         retainingIdleUSBDemand: (_ hasActiveCapture: Bool) -> Bool = { _ in false }

@@ -32,6 +32,9 @@ final class QuietModeActivityController {
         checkIdleUnplug: @escaping () -> Void = {
             if ScreenCaptureManager.shared.clearIdleUSBDemandIfUnplugged() {
                 ScreenCaptureManager.shared.onScreensChanged?()
+            } else if ScreenCaptureManager.shared.restoreIdleUSBDemandIfPluggedIn() {
+                ScreenCaptureManager.shared.onScreensChanged?()
+                DeviceRegistry.shared.prewakeBluetoothForIdleResume()
             }
         },
         resumeCapture: @escaping () -> Void = {
