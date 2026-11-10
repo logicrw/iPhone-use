@@ -101,12 +101,15 @@ final class DeviceRegistry {
             // Dispatch off HIDPeripheral.queue before querying queue-synchronized readers.
             self?.matchQueue.async {
                 guard let self else { return }
-                let screens = ScreenCaptureManager.shared.all
+                let snapshot = ScreenCaptureManager.shared.sampleScreensWithRevision()
                 let sessions = self.currentHostSessions()
                 self.lock.withLock {
-                    self.promoteVerifiedAssociationsLocked(screens: screens, sessions: sessions)
+                    self.promoteVerifiedAssociationsLocked(screens: snapshot.screens, sessions: sessions)
                 }
-                self.reconnectSavedBluetoothHosts(for: screens, resetExhausted: false)
+                self.reconnectSavedBluetoothHosts(
+                    for: snapshot.screens,
+                    retainsUSBDemand: snapshot.retainsUSBDemand,
+                    resetExhausted: false)
             }
             self?.scheduleMatch()
         }
@@ -140,7 +143,10 @@ final class DeviceRegistry {
             promoteVerifiedAssociationsLocked(screens: snapshot.screens, sessions: sessions)
         }
         HIDPeripheral.shared.setUSBScreenDemand(snapshot.retainsUSBDemand, revision: snapshot.revision)
-        reconnectSavedBluetoothHosts(for: snapshot.screens, resetExhausted: resetExhausted)
+        reconnectSavedBluetoothHosts(
+            for: snapshot.screens,
+            retainsUSBDemand: snapshot.retainsUSBDemand,
+            resetExhausted: resetExhausted)
     }
 
     /// Public trigger to force immediate BLE reconnect attempt for saved paired hosts.
@@ -160,10 +166,12 @@ final class DeviceRegistry {
     ) {
         matchQueue.async { [weak self] in
             guard let self else { return }
-            guard observeUSBTopology().hasAttachedDevices else { return }
+            guard
+                let revision = ScreenCaptureManager.shared.prewakeUSBDemandIfPluggedIn(
+                    observeUSBTopology: observeUSBTopology)
+            else { return }
             let pairings = self.lock.withLock { self.pairings }
             guard !pairings.isEmpty else { return }
-            let revision = ScreenCaptureManager.shared.mintUSBDemandRevision()
             HIDPeripheral.shared.setUSBScreenDemand(true, revision: revision)
             let connected = Set(HIDPeripheral.shared.connectedHosts)
             let targets = Set(pairings.values).subtracting(connected)
@@ -586,11 +594,17 @@ final class DeviceRegistry {
     }
 
     private func reconnectSavedBluetoothHostsIfNeeded(resetExhausted: Bool) {
-        reconnectSavedBluetoothHosts(for: ScreenCaptureManager.shared.all, resetExhausted: resetExhausted)
+        let snapshot = ScreenCaptureManager.shared.sampleScreensWithRevision()
+        reconnectSavedBluetoothHosts(
+            for: snapshot.screens,
+            retainsUSBDemand: snapshot.retainsUSBDemand,
+            resetExhausted: resetExhausted)
     }
 
     private func reconnectSavedBluetoothHosts(
-        for screens: [ScreenCaptureSession], resetExhausted: Bool
+        for screens: [ScreenCaptureSession],
+        retainsUSBDemand: Bool,
+        resetExhausted: Bool
     ) {
         let pairings = lock.withLock { self.pairings }
         guard !pairings.isEmpty else { return }
@@ -600,7 +614,8 @@ final class DeviceRegistry {
         let connected = Set(HIDPeripheral.shared.connectedHosts)
         let targets = HIDPeripheral.hostsToReconnect(
             pairings: pairings, presentScreenIDs: presentIDs,
-            matchedScreenIDs: matchedIDs, connectedHosts: connected)
+            matchedScreenIDs: matchedIDs, connectedHosts: connected,
+            retainsUSBDemand: retainsUSBDemand)
         HIDPeripheral.shared.reconnectKnownHosts(targets, resetExhausted: resetExhausted)
     }
 

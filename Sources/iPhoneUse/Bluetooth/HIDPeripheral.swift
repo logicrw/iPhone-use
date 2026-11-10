@@ -293,15 +293,20 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
         }
     }
 
-    /// Selects saved BLE hosts that should be woken for currently present, unmatched USB screens.
+    /// Selects saved BLE hosts that should be woken for currently present, unmatched USB screens,
+    /// or for all saved pairings while idle/prewake USB demand is retained before video capture starts.
     static func hostsToReconnect(
         pairings: [String: UUID],
         presentScreenIDs: Set<String>,
         matchedScreenIDs: Set<String>,
-        connectedHosts: Set<UUID>
+        connectedHosts: Set<UUID>,
+        retainsUSBDemand: Bool = false
     ) -> Set<UUID> {
         let unmatchedScreens = presentScreenIDs.subtracting(matchedScreenIDs)
-        guard !unmatchedScreens.isEmpty else { return [] }
+        if unmatchedScreens.isEmpty {
+            guard presentScreenIDs.isEmpty, retainsUSBDemand else { return [] }
+            return Set(pairings.values).subtracting(connectedHosts)
+        }
         let matchedHosts = Set(matchedScreenIDs.compactMap { pairings[$0] })
         var candidates = Set(unmatchedScreens.compactMap { pairings[$0] })
         if unmatchedScreens.contains(where: { pairings[$0] == nil }) {

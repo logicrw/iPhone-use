@@ -251,7 +251,6 @@ final class ScreenCaptureManager: CaptureValeriaRecoveryHost {
         let hasPendingSwitches = USBValeriaConfigurator.requiresStartupReconciliation
         let (generation, needsAsyncReconcile) = lock.withLock { () -> (UInt64, Bool) in
             isStopped = false
-            retainsIdleUSBDemand = false
             captureDiscoveryEnabled = false
             lifecycleGeneration &+= 1
             let gen = lifecycleGeneration
@@ -469,8 +468,15 @@ final class ScreenCaptureManager: CaptureValeriaRecoveryHost {
         }
     }
 
-    func mintUSBDemandRevision() -> UInt64 {
-        lock.withLock {
+    func prewakeUSBDemandIfPluggedIn(
+        observeUSBTopology: () -> USBValeriaConfigurator.IOSUSBTopologyObservation =
+            USBValeriaConfigurator.currentIOSUSBTopology
+    ) -> UInt64? {
+        guard observeUSBTopology().hasAttachedDevices else { return nil }
+        return lock.withLock {
+            if screens.isEmpty {
+                retainsIdleUSBDemand = true
+            }
             usbDemandRevision &+= 1
             return usbDemandRevision
         }
@@ -541,6 +547,10 @@ final class ScreenCaptureManager: CaptureValeriaRecoveryHost {
             querySingleIOSDevice: {
                 USBValeriaConfigurator.currentSingleIOSDeviceIdentity()
             })
+        let noAttachedUSB =
+            devices.isEmpty && lock.withLock({ !isStopped && retainsIdleUSBDemand })
+            ? USBValeriaConfigurator.currentIOSUSBTopology().confirmsNoAttachedDevices
+            : false
 
         var changed = false
         var shouldReallowCaptureDevices = false
@@ -631,6 +641,10 @@ final class ScreenCaptureManager: CaptureValeriaRecoveryHost {
                 if verificationState == .pending { job = (identityGeneration, sources) }
             }
             if sources.isEmpty {
+                if noAttachedUSB, retainsIdleUSBDemand {
+                    retainsIdleUSBDemand = false
+                    changed = true
+                }
                 emptyRefreshCount &+= 1
                 if emptyRefreshCount % 5 == 0 {
                     shouldReallowCaptureDevices = true
@@ -640,6 +654,7 @@ final class ScreenCaptureManager: CaptureValeriaRecoveryHost {
                     loggedNoScreens = true
                 }
             } else {
+                retainsIdleUSBDemand = false
                 emptyRefreshCount = 0
                 loggedNoScreens = false
             }

@@ -72,6 +72,30 @@ final class QuietModeActivityControllerTests: XCTestCase {
         controller.checkIdle()
         XCTAssertEqual(demands, [true, false, true], "Replugging USB during idle must restore Bluetooth demand")
         XCTAssertTrue(policy.shouldRunCoreBluetooth)
+        let savedHost = UUID()
+        let replugSnapshot = manager.sampleScreensWithRevision()
+        var tracker = HIDReconnectTracker()
+        let initialTargets = HIDPeripheral.hostsToReconnect(
+            pairings: ["phone": savedHost],
+            presentScreenIDs: Set(replugSnapshot.screens.map(\.id)),
+            matchedScreenIDs: [],
+            connectedHosts: [],
+            retainsUSBDemand: replugSnapshot.retainsUSBDemand)
+        XCTAssertEqual(initialTargets, [savedHost])
+        XCTAssertTrue(tracker.updateTargets(initialTargets, activeSessions: [], resetExhausted: true).isEmpty)
+        // Simulate CBPeripheralManagerDidUpdateState(.poweredOn) firing onHostsChanged before GATT publish completes.
+        let hostsChangedSnapshot = manager.sampleScreensWithRevision()
+        let hostsChangedTargets = HIDPeripheral.hostsToReconnect(
+            pairings: ["phone": savedHost],
+            presentScreenIDs: Set(hostsChangedSnapshot.screens.map(\.id)),
+            matchedScreenIDs: [],
+            connectedHosts: [],
+            retainsUSBDemand: hostsChangedSnapshot.retainsUSBDemand)
+        XCTAssertEqual(hostsChangedTargets, [savedHost])
+        XCTAssertTrue(tracker.updateTargets(hostsChangedTargets, activeSessions: [], resetExhausted: false).isEmpty)
+        XCTAssertEqual(
+            tracker.connectableHosts(activeSessions: []), [savedHost],
+            "onHostsChanged during idle USB replug must not wipe reconnect targets before GATT publish finishes")
         controller.checkIdle()
         XCTAssertEqual(demands, [true, false, true], "Replug notification must only be emitted once")
     }

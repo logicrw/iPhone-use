@@ -326,7 +326,7 @@ final class HIDConnectionStateTests: XCTestCase {
                 matchedScreenIDs: [], connectedHosts: [watch]),
             [phoneA])
 
-        // Once phoneA connects or matches, or when no USB screen is present, no wake is needed.
+        // Once phoneA connects or matches, or when no USB screen is present without retained idle demand, no wake is needed.
         XCTAssertTrue(
             HIDPeripheral.hostsToReconnect(
                 pairings: pairings, presentScreenIDs: ["screen-a"],
@@ -335,13 +335,30 @@ final class HIDConnectionStateTests: XCTestCase {
         XCTAssertTrue(
             HIDPeripheral.hostsToReconnect(
                 pairings: pairings, presentScreenIDs: ["screen-a"],
-                matchedScreenIDs: ["screen-a"], connectedHosts: []
+                matchedScreenIDs: ["screen-a"], connectedHosts: [],
+                retainsUSBDemand: true
             ).isEmpty)
         XCTAssertTrue(
             HIDPeripheral.hostsToReconnect(
                 pairings: pairings, presentScreenIDs: [],
-                matchedScreenIDs: [], connectedHosts: []
+                matchedScreenIDs: [], connectedHosts: [],
+                retainsUSBDemand: false
             ).isEmpty)
+
+        // When video capture is suspended/starting (presentScreenIDs is empty) and USB demand is retained,
+        // saved pairings not yet connected over BLE remain reconnect targets across onHostsChanged.
+        XCTAssertEqual(
+            HIDPeripheral.hostsToReconnect(
+                pairings: pairings, presentScreenIDs: [],
+                matchedScreenIDs: [], connectedHosts: [watch],
+                retainsUSBDemand: true),
+            [phoneA, phoneB])
+        XCTAssertEqual(
+            HIDPeripheral.hostsToReconnect(
+                pairings: pairings, presentScreenIDs: [],
+                matchedScreenIDs: [], connectedHosts: [watch, phoneA],
+                retainsUSBDemand: true),
+            [phoneB])
 
         // Replaced USB screen ID wakes saved hosts not already matched to another live screen.
         XCTAssertEqual(
