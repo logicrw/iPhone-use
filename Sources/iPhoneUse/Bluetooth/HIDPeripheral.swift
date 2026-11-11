@@ -241,6 +241,7 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
         if manager?.isAdvertising == true {
             manager?.stopAdvertising()
         }
+        manager?.removeAllServices()
         let hostsToCancel =
             clearTargetsOnStop
             ? reconnectTracker.cancelAllForStop()

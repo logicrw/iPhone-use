@@ -42,7 +42,9 @@ final class QuietModeActivityControllerTests: XCTestCase {
                 } else if manager.restoreIdleUSBDemandIfPluggedIn(observeUSBTopology: { topology }) {
                     syncDemand()
                 }
-            }, resumeCapture: { XCTFail("No request should wake capture") })
+            },
+            resumeCapture: { XCTFail("No request should wake capture") },
+            setResidentDemand: { policy.setResidentQuietDemand($0) })
         controller.start()
         defer { controller.stop() }
         clock = 59.99

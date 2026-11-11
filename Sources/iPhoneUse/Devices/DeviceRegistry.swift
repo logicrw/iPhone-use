@@ -153,8 +153,11 @@ final class DeviceRegistry {
     func reconnectBluetooth(resetExhausted: Bool = true) {
         matchQueue.async { [weak self] in
             guard let self else { return }
-            let screens = ScreenCaptureManager.shared.all
-            self.reconnectSavedBluetoothHosts(for: screens, resetExhausted: resetExhausted)
+            let snapshot = ScreenCaptureManager.shared.sampleScreensWithRevision()
+            self.reconnectSavedBluetoothHosts(
+                for: snapshot.screens,
+                retainsUSBDemand: snapshot.retainsUSBDemand,
+                resetExhausted: resetExhausted)
         }
     }
 

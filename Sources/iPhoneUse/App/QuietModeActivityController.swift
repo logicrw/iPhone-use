@@ -17,6 +17,7 @@ final class QuietModeActivityController {
     private let suspendCapture: () -> ScreenCaptureStopResult
     private let resumeCapture: () -> Void
     private let checkIdleUnplug: () -> Void
+    private let setResidentDemand: (Bool) -> Void
     private var shutdownClean = true
     private var resumedAt: TimeInterval?
 
@@ -39,6 +40,9 @@ final class QuietModeActivityController {
         resumeCapture: @escaping () -> Void = {
             DeviceRegistry.shared.prewakeBluetoothForIdleResume()
             ScreenCaptureManager.shared.start()
+        },
+        setResidentDemand: @escaping (Bool) -> Void = {
+            HIDPeripheral.shared.setResidentQuietDemand($0)
         }
     ) {
         self.mode = mode
@@ -46,6 +50,7 @@ final class QuietModeActivityController {
         self.suspendCapture = suspendCapture
         self.resumeCapture = resumeCapture
         self.checkIdleUnplug = checkIdleUnplug
+        self.setResidentDemand = setResidentDemand
         let value = environment["IPHONE_USE_IDLE_TIMEOUT"].flatMap(Double.init)
         timeout = value.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 60
     }
@@ -74,7 +79,7 @@ final class QuietModeActivityController {
         timer = nil
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
-        HIDPeripheral.shared.setResidentQuietDemand(false)
+        setResidentDemand(false)
     }
 
     func modeChanged() {
@@ -84,8 +89,8 @@ final class QuietModeActivityController {
     }
 
     private func syncResidentDemand() {
-        let isResident = mode() == .residentQuiet
-        HIDPeripheral.shared.setResidentQuietDemand(isResident)
+        let isResident = mode() == .residentQuiet && !suspended
+        setResidentDemand(isResident)
     }
 
     func setOpenWindows(_ open: Bool) {
@@ -137,6 +142,7 @@ final class QuietModeActivityController {
         shutdownClean = true
         suspended = false
         resumedAt = now()
+        syncResidentDemand()
         resumeCapture()
         return true
     }
@@ -151,6 +157,7 @@ final class QuietModeActivityController {
         else { return }
         suspended = true
         resumedAt = nil
+        syncResidentDemand()
         let result = suspendCapture()
         shutdownClean = result.isClean
         if !result.isClean {
