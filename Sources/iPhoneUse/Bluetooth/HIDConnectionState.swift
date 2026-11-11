@@ -465,7 +465,7 @@ struct HIDLifecyclePolicy: Equatable {
     /// In resident quiet mode, BLE advertising is always maintained while the system
     /// is awake so paired or pairing phones can discover and connect via Bluetooth.
     var hasEffectiveDemand: Bool {
-        hasPresentUSBScreens || hasResidentQuietDemand || (hasOpenControlWindows && !isDisplaySleeping)
+        hasPresentUSBScreens || (hasOpenControlWindows && !isDisplaySleeping)
     }
 
     var shouldRunCoreBluetooth: Bool {

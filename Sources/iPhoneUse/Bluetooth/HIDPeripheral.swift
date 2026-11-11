@@ -246,9 +246,15 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
             clearTargetsOnStop
             ? reconnectTracker.cancelAllForStop()
             : reconnectTracker.suspendForLifecycleTeardown()
-        for host in hostsToCancel {
+        let peripheralsToCancel = Set(hostsToCancel).union(centrals.keys)
+        for host in peripheralsToCancel {
             if let peripheral = reconnectingPeripherals[host] {
                 centralManager?.cancelPeripheralConnection(peripheral)
+            }
+        }
+        if let centralManager, centralManager.state == .poweredOn, !peripheralsToCancel.isEmpty {
+            for peripheral in centralManager.retrievePeripherals(withIdentifiers: Array(peripheralsToCancel)) {
+                centralManager.cancelPeripheralConnection(peripheral)
             }
         }
         reconnectingPeripherals.removeAll()
