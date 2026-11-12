@@ -459,13 +459,10 @@ struct HIDLifecyclePolicy: Equatable {
         !activeWindowTokens.isEmpty
     }
 
-    /// Open control windows show Bluetooth pairing instructions only while at least
-    /// one display is awake. Headless USB/MCP control remains active across display
-    /// blanking (`isDisplaySleeping`) until actual system sleep (`isSystemSleeping`).
-    /// In resident quiet mode, BLE advertising is always maintained while the system
-    /// is awake so paired or pairing phones can discover and connect via Bluetooth.
+    /// BLE is strictly gated on physical/retained USB screen presence so an open
+    /// window never keeps the Bluetooth link alive after the USB cable is unplugged.
     var hasEffectiveDemand: Bool {
-        hasPresentUSBScreens || (hasOpenControlWindows && !isDisplaySleeping)
+        hasPresentUSBScreens
     }
 
     var shouldRunCoreBluetooth: Bool {

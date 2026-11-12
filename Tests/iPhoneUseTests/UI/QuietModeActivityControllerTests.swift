@@ -320,8 +320,11 @@ final class QuietModeActivityControllerTests: XCTestCase {
         XCTAssertFalse(policy.shouldRunCoreBluetooth)
         XCTAssertEqual(policy.inactiveReason, .idleNoDemand)
 
-        // Enabling resident quiet demand (e.g. --resident-quiet) keeps BLE running so phones can pair.
+        // Resident quiet demand without USB attached remains gated off until USB screen demand is present.
         policy.setResidentQuietDemand(true)
+        XCTAssertFalse(policy.shouldRunCoreBluetooth)
+        XCTAssertEqual(policy.inactiveReason, .idleNoDemand)
+        XCTAssertTrue(policy.setUSBScreenDemand(true, revision: 1))
         XCTAssertTrue(policy.shouldRunCoreBluetooth)
         XCTAssertNil(policy.inactiveReason)
 

@@ -219,6 +219,17 @@ final class DeviceRegistry {
             &verifiedAssociations,
             screenIdentities: Dictionary(uniqueKeysWithValues: screens.map { ($0.id, $0.associationIdentity) }),
             pairings: pairings, sessions: sessions)
+        for screen in screens {
+            guard let host = pairings[screen.id], let session = sessions[host],
+                pairings.filter({ $0.value == host }).count == 1,
+                !RelativePointerCalibration.isBoundToDifferentScreen(host: host, screenID: screen.id)
+            else { continue }
+            let assoc = Association(screen: screen.associationIdentity, host: host, session: session)
+            verifiedAssociations.insert(assoc)
+            if pointerOrientations[assoc] == nil {
+                pointerOrientations[assoc] = .identity
+            }
+        }
     }
 
     /// Value-only transitions keep authorization tests independent of USB and Bluetooth hardware.
@@ -587,6 +598,9 @@ final class DeviceRegistry {
     /// explicit matching may move pointers, with at most one delayed retry.
     @discardableResult
     func match(force: Bool = false, probe: Bool = false, allowProbing: Bool = true) -> [String: UUID] {
+        if force {
+            HIDPeripheral.shared.setAllowedHosts(nil)
+        }
         if allowProbing {
             reconnectSavedBluetoothHostsIfNeeded(resetExhausted: true)
             ScreenCaptureManager.shared.retryIdentityVerification()
@@ -610,9 +624,14 @@ final class DeviceRegistry {
         resetExhausted: Bool
     ) {
         let pairings = lock.withLock { self.pairings }
-        guard !pairings.isEmpty else { return }
+        guard !pairings.isEmpty else {
+            HIDPeripheral.shared.setAllowedHosts(nil)
+            return
+        }
         let devices = buildDevices(from: screens)
         let presentIDs = Set(devices.map(\.id))
+        let allPresentScreensPaired = presentIDs.allSatisfy { pairings[$0] != nil }
+        HIDPeripheral.shared.setAllowedHosts(allPresentScreensPaired ? Set(pairings.values) : nil)
         let matchedIDs = Set(devices.filter { $0.host != nil }.map(\.id))
         let connected = Set(HIDPeripheral.shared.connectedHosts)
         let targets = HIDPeripheral.hostsToReconnect(

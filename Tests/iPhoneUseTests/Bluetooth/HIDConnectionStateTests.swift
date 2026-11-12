@@ -539,17 +539,18 @@ final class HIDConnectionStateTests: XCTestCase {
         XCTAssertEqual(policy.inactiveReason, .idleNoDemand)
         XCTAssertEqual(policy.inactiveReason?.stateDescription, "idle (waiting for iPhone)")
 
-        // Opening Waiting for iPhone window advertises Bluetooth for pre-USB pairing.
+        // Opening Waiting for iPhone window without USB attached keeps CoreBluetooth gated off
+        // so open windows never hold BLE connections alive after USB unplug.
         policy.beginWindowDemand(waitingWindow)
-        XCTAssertTrue(policy.shouldRunCoreBluetooth)
-        XCTAssertNil(policy.inactiveReason)
+        XCTAssertFalse(policy.shouldRunCoreBluetooth)
+        XCTAssertEqual(policy.inactiveReason, .idleNoDemand)
 
         // Placeholder replacement registers the device window before closing the waiting window.
         policy.beginWindowDemand(deviceWindow)
         policy.endWindowDemand(waitingWindow)
-        XCTAssertTrue(policy.shouldRunCoreBluetooth)
+        XCTAssertFalse(policy.shouldRunCoreBluetooth)
 
-        // Idempotent close of the last window with 0 USB screens suspends back to idle.
+        // Idempotent close of the last window with 0 USB screens remains idle.
         policy.endWindowDemand(deviceWindow)
         policy.endWindowDemand(deviceWindow)
         XCTAssertFalse(policy.shouldRunCoreBluetooth)
@@ -712,9 +713,9 @@ final class HIDConnectionStateTests: XCTestCase {
         XCTAssertTrue(
             policy.resolveUnknownDisplayQuery(.atLeastOneAwake, generation: startupRetry.generation))
         XCTAssertFalse(policy.hasUnresolvedDisplayQuery)
-        XCTAssertTrue(policy.shouldRunCoreBluetooth)
+        XCTAssertFalse(policy.shouldRunCoreBluetooth)
 
-        // Display sleep with 0 USB phones suspends window-only BLE advertising immediately.
+        // Display sleep with 0 USB phones keeps BLE inactive.
         policy.screensDidSleep()
         XCTAssertFalse(policy.shouldRunCoreBluetooth)
         XCTAssertEqual(policy.inactiveReason, .idleNoDemand)

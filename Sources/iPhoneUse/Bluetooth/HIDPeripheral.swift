@@ -31,6 +31,7 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
     private var centrals: [UUID: CBCentral] = [:]
     private var connections = HIDConnectionState()
     private var serviceChangedSent = Set<UUID>()
+    private var allowedHosts: Set<UUID>?
 
     private var stateDescription = "starting"
     var state: String { queue.sync { stateDescription } }
@@ -246,7 +247,7 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
             clearTargetsOnStop
             ? reconnectTracker.cancelAllForStop()
             : reconnectTracker.suspendForLifecycleTeardown()
-        let peripheralsToCancel = Set(hostsToCancel).union(centrals.keys)
+        let peripheralsToCancel = Set(hostsToCancel).union(centrals.keys).union(connections.sessions.keys)
         for host in peripheralsToCancel {
             if let peripheral = reconnectingPeripherals[host] {
                 centralManager?.cancelPeripheralConnection(peripheral)
@@ -273,6 +274,33 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
         }
         stateDescription = nextDescription
         return hadActiveManagers || hadSessions
+    }
+
+    /// Restricts GATT input subscriptions to known paired hosts when all present USB
+    /// screens already have a saved pairing, preventing stray nearby BLE centrals
+    /// (such as an Apple Watch) from subscribing and polluting `unmatchedHosts`.
+    func setAllowedHosts(_ hosts: Set<UUID>?) {
+        queue.async {
+            guard self.allowedHosts != hosts else { return }
+            self.allowedHosts = hosts
+            if let allowed = hosts {
+                let disallowed = Set(self.connections.subscriptions.keys).subtracting(allowed)
+                var removedAny = false
+                for host in disallowed {
+                    for channel in self.connections.subscriptions[host] ?? [] {
+                        self.connections.unsubscribe(channel, host: host)
+                    }
+                    self.centrals[host] = nil
+                    removedAny = true
+                }
+                if removedAny {
+                    self.hostsChanged()
+                    return
+                }
+            }
+            self.advertise()
+            self.updateHostDescription()
+        }
     }
 
     /// Initiates a bounded BLE link to saved bonded iPhones whose USB screens are
@@ -510,8 +538,24 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
         manager.add(service)
     }
 
+    private func shouldAdvertiseOnQueue() -> Bool {
+        if let allowed = allowedHosts, !allowed.isEmpty,
+            allowed.isSubset(of: Set(connections.sessions.keys))
+        {
+            return false
+        }
+        return true
+    }
+
     private func advertise() {
-        guard let manager, manager.state == .poweredOn, published, !manager.isAdvertising else { return }
+        guard let manager, manager.state == .poweredOn, published else { return }
+        if !shouldAdvertiseOnQueue() {
+            if manager.isAdvertising {
+                manager.stopAdvertising()
+            }
+            return
+        }
+        guard !manager.isAdvertising else { return }
         manager.startAdvertising([
             CBAdvertisementDataLocalNameKey: localName,
             CBAdvertisementDataServiceUUIDsKey: [CBUUID(string: "1812")],
@@ -634,6 +678,10 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
         guard peripheral === manager, published, peripheral.state == .poweredOn,
             let channel = channel(for: characteristic)
         else { return }
+        if let allowed = allowedHosts, !allowed.contains(central.identifier) {
+            log("ignoring subscription \(characteristic.uuid) from non-paired central \(central.identifier)")
+            return
+        }
         remember(central)
         let establishedInput = Self.recordSubscription(
             channel, host: central.identifier,
@@ -694,8 +742,13 @@ final class HIDPeripheral: NSObject, CBPeripheralManagerDelegate, CBCentralManag
 
     private func updateHostDescription() {
         let count = hostsWithInput.count
-        stateDescription =
-            count == 0 ? "advertising as \(localName)" : "\(count) connected, advertising as \(localName)"
+        let isAdv = manager?.isAdvertising == true || shouldAdvertiseOnQueue()
+        if count == 0 {
+            stateDescription = isAdv ? "advertising as \(localName)" : "ready (\(localName))"
+        } else {
+            stateDescription =
+                isAdv ? "\(count) connected, advertising as \(localName)" : "\(count) connected"
+        }
     }
 
     /// Stop a host at its first rejected notification so per-host FIFO order is
